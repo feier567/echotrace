@@ -55,6 +55,8 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   Set<String> _excludedUsernames = {};
   bool _autoLoadScheduled = false;
   bool _showAllMessageTypes = false;
+  bool _analysisBlockedByRealtime = false;
+  bool _realtimeDialogShown = false;
 
   bool get _isSubPage => _showAnnualReportSubPage || _showDualReportSubPage;
 
@@ -72,6 +74,56 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
     });
+  }
+
+  Future<void> _showRealtimeModeDialog() async {
+    if (!mounted) return;
+    final appState = context.read<AppState>();
+    final goToSettings = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('提示'),
+        content: const Text(
+          '实时模式下无法进行数据分析。是否前往设置切换为备份模式？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('去设置'),
+          ),
+        ],
+      ),
+    );
+    if (goToSettings == true) {
+      appState.setCurrentPage('settings');
+    }
+  }
+
+  Future<bool> _ensureAnalysisEnabled() async {
+    final isRealtime = widget.databaseService.mode == DatabaseMode.realtime;
+    if (!isRealtime) {
+      _analysisBlockedByRealtime = false;
+      _realtimeDialogShown = false;
+      return true;
+    }
+
+    await logger.warning('AnalyticsPage', '实时模式下无法进行数据分析');
+    _analysisBlockedByRealtime = true;
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _loadingStatus = '实时模式下无法进行数据分析';
+      });
+    }
+    if (!_realtimeDialogShown) {
+      _realtimeDialogShown = true;
+      await _showRealtimeModeDialog();
+    }
+    return false;
   }
 
   Future<void> _loadData() async {
@@ -104,6 +156,10 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
           _loadingStatus = '数据库未连接';
         });
       }
+      return;
+    }
+
+    if (!await _ensureAnalysisEnabled()) {
       return;
     }
 
@@ -640,6 +696,9 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
       _loadingStatus = '正在更新排除名单...';
     });
     try {
+      if (!await _ensureAnalysisEnabled()) {
+        return;
+      }
       await _performAnalysis(
         dbModifiedTime ?? DateTime.now().millisecondsSinceEpoch,
       );
@@ -667,7 +726,8 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
         !_isLoading &&
         !_isSubPage &&
         _overallStats == null &&
-        !_autoLoadScheduled) {
+        !_autoLoadScheduled &&
+        !_analysisBlockedByRealtime) {
       _autoLoadScheduled = true;
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;

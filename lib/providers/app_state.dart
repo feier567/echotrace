@@ -398,6 +398,10 @@ class AppState extends ChangeNotifier {
   bool _needsSafeModePrompt = false;
   bool _safeModeEnabled = false;
   bool _autoConnectDeferred = false;
+  bool _hasUnsavedSettings = false;
+  int _settingsSaveRequestId = 0;
+  String? _settingsSaveExitPage;
+  Completer<bool>? _settingsSaveCompleter;
 
   // 解密进度
   bool _isDecrypting = false;
@@ -415,6 +419,9 @@ class AppState extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   bool get needsSafeModePrompt => _needsSafeModePrompt;
   bool get safeModeEnabled => _safeModeEnabled;
+  bool get hasUnsavedSettings => _hasUnsavedSettings;
+  int get settingsSaveRequestId => _settingsSaveRequestId;
+  String? get settingsSaveExitPage => _settingsSaveExitPage;
 
   // 解密进度 getters
   bool get isDecrypting => _isDecrypting;
@@ -531,6 +538,32 @@ class AppState extends ChangeNotifier {
   /// 设置当前页面
   void setCurrentPage(String page) {
     _currentPage = page;
+    notifyListeners();
+  }
+
+  void setHasUnsavedSettings(bool value) {
+    if (_hasUnsavedSettings == value) return;
+    _hasUnsavedSettings = value;
+    notifyListeners();
+  }
+
+  Future<bool> requestSaveSettings({String? exitPage}) {
+    if (_settingsSaveCompleter != null &&
+        !_settingsSaveCompleter!.isCompleted) {
+      return _settingsSaveCompleter!.future;
+    }
+    _settingsSaveExitPage = exitPage;
+    _settingsSaveCompleter = Completer<bool>();
+    _settingsSaveRequestId += 1;
+    notifyListeners();
+    return _settingsSaveCompleter!.future;
+  }
+
+  void completeSaveSettings(bool success) {
+    if (_settingsSaveCompleter == null) return;
+    _settingsSaveCompleter!.complete(success);
+    _settingsSaveCompleter = null;
+    _settingsSaveExitPage = null;
     notifyListeners();
   }
 

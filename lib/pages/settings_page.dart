@@ -50,6 +50,8 @@ class _SettingsPageState extends State<SettingsPage>
   bool _debugMode = false; // 调试模式开关
   bool _isGettingDbKey = false;
   bool _isGettingImageKey = false;
+  bool _suppressDirtyTracking = false;
+  int _lastSaveRequestId = 0;
   String? _dbKeyProgressMessage;
   String? _imageKeyProgressMessage;
   // 记录初始配置，防止重复保存同样配置
@@ -67,6 +69,8 @@ class _SettingsPageState extends State<SettingsPage>
     _toast = ToastOverlay(this);
     _decryptService = DecryptService();
     _decryptService.initialize();
+    _attachDirtyListeners();
+    _lastSaveRequestId = context.read<AppState>().settingsSaveRequestId;
     _loadConfig();
   }
 
@@ -84,7 +88,22 @@ class _SettingsPageState extends State<SettingsPage>
     super.dispose();
   }
 
+  void _attachDirtyListeners() {
+    _keyController.addListener(_onConfigFieldChanged);
+    _pathController.addListener(_onConfigFieldChanged);
+    _documentsPathController.addListener(_onConfigFieldChanged);
+    _wxidController.addListener(_onConfigFieldChanged);
+    _imageXorKeyController.addListener(_onConfigFieldChanged);
+    _imageAesKeyController.addListener(_onConfigFieldChanged);
+  }
+
+  void _onConfigFieldChanged() {
+    if (_suppressDirtyTracking || !mounted) return;
+    _syncUnsavedState();
+  }
+
   Future<void> _loadConfig() async {
+    _suppressDirtyTracking = true;
     final key = await _configService.getDecryptKey();
     final path = await _configService.getDatabasePath();
     final mode = await _configService.getDatabaseMode();
@@ -114,6 +133,16 @@ class _SettingsPageState extends State<SettingsPage>
 // 始终显示 wxid 输入框
       });
     }
+    _suppressDirtyTracking = false;
+    _syncUnsavedState(force: true);
+  }
+
+  String _normalizeXorKey(String value) {
+    final trimmed = value.trim();
+    if (trimmed.toLowerCase().startsWith('0x')) {
+      return trimmed.substring(2);
+    }
+    return trimmed;
   }
 
   bool _hasConfigChanged() {
@@ -121,7 +150,7 @@ class _SettingsPageState extends State<SettingsPage>
     final path = _pathController.text.trim();
     final documentsPath = _documentsPathController.text.trim();
     final wxid = _wxidController.text.trim();
-    final imageXorKey = _imageXorKeyController.text.trim();
+    final imageXorKey = _normalizeXorKey(_imageXorKeyController.text);
     final imageAesKey = _imageAesKeyController.text.trim();
 
     return key != _initialKey ||
@@ -133,7 +162,15 @@ class _SettingsPageState extends State<SettingsPage>
         imageAesKey != _initialImageAesKey;
   }
 
-  /// 检查目录中是否存在账号目录（包含 db_storage 子文件夹）
+  void _syncUnsavedState({bool force = false}) {
+    if (!mounted) return;
+    final hasChanged = _hasConfigChanged();
+    final appState = context.read<AppState>();
+    if (force || appState.hasUnsavedSettings != hasChanged) {
+      appState.setHasUnsavedSettings(hasChanged);
+    }
+  }
+
   Future<void> _checkAccountDirectory(String path) async {
     // 仍然检查目录，但不影响 wxid 输入框的显示
     try {
@@ -717,33 +754,32 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
-  Future<void> _saveConfig() async {
+  Future<bool> _saveConfig({
+    String? redirectPage,
+    Duration? redirectDelay,
+  }) async {
     if (!_formKey.currentState!.validate()) {
-      return;
+      return false;
     }
 
     if (!_hasConfigChanged()) {
       _showMessage('配置未发生变化，无需保存', true);
-      return;
+      return true;
     }
 
     setState(() {
       _isLoading = true;
     });
 
+    var reconnectSuccess = true;
     try {
       final key = _keyController.text.trim();
       final path = _pathController.text.trim();
       final documentsPath = _documentsPathController.text.trim();
       final wxid = _wxidController.text.trim();
       final documentsPathChanged = documentsPath != _initialDocumentsPath;
-      var imageXorKey = _imageXorKeyController.text.trim();
+      var imageXorKey = _normalizeXorKey(_imageXorKeyController.text);
       final imageAesKey = _imageAesKeyController.text.trim();
-
-      // 移除XOR密钥的0x前缀（如果有）
-      if (imageXorKey.toLowerCase().startsWith('0x')) {
-        imageXorKey = imageXorKey.substring(2);
-      }
 
       // 保存配置
       await _configService.saveDecryptKey(key);
@@ -791,14 +827,18 @@ class _SettingsPageState extends State<SettingsPage>
                 : '备份模式';
             _showMessage('数据库连接成功！当前使用$actualModeText', true);
 
-            // 延迟跳转到聊天页面
-            Future.delayed(const Duration(seconds: 2), () {
-              if (mounted) {
-                context.read<AppState>().setCurrentPage('chat');
-              }
-            });
+            final targetPage = redirectPage ?? 'chat';
+            final delay = redirectDelay ?? const Duration(seconds: 2);
+            if (targetPage.isNotEmpty) {
+              Future.delayed(delay, () {
+                if (mounted) {
+                  context.read<AppState>().setCurrentPage(targetPage);
+                }
+              });
+            }
           }
         } catch (e) {
+          reconnectSuccess = false;
           if (mounted) {
             _showMessage('数据库连接失败: $e', false);
           }
@@ -813,8 +853,11 @@ class _SettingsPageState extends State<SettingsPage>
       _initialWxid = wxid;
       _initialImageXorKey = imageXorKey;
       _initialImageAesKey = imageAesKey;
+      _syncUnsavedState(force: true);
+      return reconnectSuccess;
     } catch (e) {
       _showMessage('保存配置失败: $e', false);
+      return false;
     } finally {
       if (mounted) {
         setState(() {
@@ -926,6 +969,22 @@ class _SettingsPageState extends State<SettingsPage>
 
   @override
   Widget build(BuildContext context) {
+    final appState = context.watch<AppState>();
+    final requestId = appState.settingsSaveRequestId;
+    if (requestId != _lastSaveRequestId) {
+      _lastSaveRequestId = requestId;
+      final exitPage = appState.settingsSaveExitPage;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        final saved = await _saveConfig(
+          redirectPage: exitPage,
+          redirectDelay: Duration.zero,
+        );
+        if (!mounted) return;
+        appState.completeSaveSettings(saved);
+      });
+    }
+
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
       body: Column(
@@ -964,7 +1023,7 @@ class _SettingsPageState extends State<SettingsPage>
                 const SizedBox(width: 12),
                 // 保存按钮
                 ElevatedButton(
-                  onPressed: _isLoading ? null : _saveConfig,
+                  onPressed: _isLoading ? null : () => _saveConfig(),
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 20,
@@ -1638,6 +1697,7 @@ class _SettingsPageState extends State<SettingsPage>
                 setState(() {
                   _databaseMode = 'backup';
                 });
+                _syncUnsavedState();
               },
             ),
 
@@ -1654,6 +1714,7 @@ class _SettingsPageState extends State<SettingsPage>
                 setState(() {
                   _databaseMode = 'realtime';
                 });
+                _syncUnsavedState();
               },
             ),
 

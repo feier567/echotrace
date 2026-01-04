@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../providers/app_state.dart';
+
+enum _UnsavedSettingsChoice { leave, save }
 
 /// 侧边栏组件（可折叠）
 class Sidebar extends StatefulWidget {
@@ -73,6 +76,63 @@ class _SidebarState extends State<Sidebar> with SingleTickerProviderStateMixin {
         _animationController.reverse();
       }
     });
+  }
+
+  Future<_UnsavedSettingsChoice?> _confirmLeaveUnsavedSettings(
+    BuildContext context,
+  ) async {
+    final result = await showDialog<_UnsavedSettingsChoice>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('提示'),
+        content: const SizedBox(
+          width: 480,
+          child: Text('您修改完设置后还未保存'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(context, _UnsavedSettingsChoice.leave),
+            child: const Text('仍然离开'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(
+              context,
+              _UnsavedSettingsChoice.save,
+            ),
+            child: const Text('保存配置并退出设置'),
+          ),
+        ],
+      ),
+    );
+    return result;
+  }
+
+  Future<void> _handleNavigation(
+    BuildContext context,
+    AppState appState,
+    String targetPage,
+  ) async {
+    if (appState.currentPage == targetPage) return;
+    if (appState.currentPage == 'settings' && appState.hasUnsavedSettings) {
+      final choice = await _confirmLeaveUnsavedSettings(context);
+      if (choice == null) {
+        return;
+      }
+      if (choice == _UnsavedSettingsChoice.leave) {
+        appState.setHasUnsavedSettings(false);
+        appState.setCurrentPage(targetPage);
+        return;
+      }
+      final saved = await appState.requestSaveSettings(
+        exitPage: targetPage,
+      );
+      if (!saved) {
+        return;
+      }
+      return;
+    }
+    appState.setCurrentPage(targetPage);
   }
 
   @override
@@ -148,14 +208,18 @@ class _SidebarState extends State<Sidebar> with SingleTickerProviderStateMixin {
                             label: '聊天记录',
                             showLabel: _showContent,
                             isSelected: appState.currentPage == 'chat',
-                            onTap: () => appState.setCurrentPage('chat'),
+                            onTap: () => unawaited(
+                              _handleNavigation(context, appState, 'chat'),
+                            ),
                           ),
                           _SidebarButton(
                             icon: Icons.analytics_outlined,
                             label: '数据分析',
                             showLabel: _showContent,
                             isSelected: appState.currentPage == 'analytics',
-                            onTap: () => appState.setCurrentPage('analytics'),
+                            onTap: () => unawaited(
+                              _handleNavigation(context, appState, 'analytics'),
+                            ),
                           ),
                           _SidebarButton(
                             icon: Icons.groups_outlined,
@@ -163,15 +227,22 @@ class _SidebarState extends State<Sidebar> with SingleTickerProviderStateMixin {
                             showLabel: _showContent,
                             isSelected:
                                 appState.currentPage == 'group_chat_analysis',
-                            onTap: () =>
-                                appState.setCurrentPage('group_chat_analysis'),
+                            onTap: () => unawaited(
+                              _handleNavigation(
+                                context,
+                                appState,
+                                'group_chat_analysis',
+                              ),
+                            ),
                           ),
                           _SidebarButton(
                             icon: Icons.file_download_outlined,
                             label: '导出记录',
                             showLabel: _showContent,
                             isSelected: appState.currentPage == 'export',
-                            onTap: () => appState.setCurrentPage('export'),
+                            onTap: () => unawaited(
+                              _handleNavigation(context, appState, 'export'),
+                            ),
                           ),
                           _SidebarButton(
                             icon: Icons.folder_outlined,
@@ -179,8 +250,13 @@ class _SidebarState extends State<Sidebar> with SingleTickerProviderStateMixin {
                             showLabel: _showContent,
                             isSelected:
                                 appState.currentPage == 'data_management',
-                            onTap: () =>
-                                appState.setCurrentPage('data_management'),
+                            onTap: () => unawaited(
+                              _handleNavigation(
+                                context,
+                                appState,
+                                'data_management',
+                              ),
+                            ),
                           ),
                         ],
                       );
@@ -199,7 +275,9 @@ class _SidebarState extends State<Sidebar> with SingleTickerProviderStateMixin {
                       label: '设置',
                       showLabel: _showContent,
                       isSelected: appState.currentPage == 'settings',
-                      onTap: () => appState.setCurrentPage('settings'),
+                      onTap: () => unawaited(
+                        _handleNavigation(context, appState, 'settings'),
+                      ),
                     );
                   },
                 ),
